@@ -118,7 +118,11 @@ def new_chat(model=MODEL, history=None):
     # Client-a session_state-la vechukkanum. Local variable-a irundha Python adha
     # garbage collect panni close pannidum -> "client has been closed" error varum.
     if "client" not in st.session_state:
-        st.session_state.client = genai.Client(api_key=api_key)
+        # SDK-oda silent retry off (attempts=1): busy-na udane namma fallback model-ku maarum
+        st.session_state.client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+        )
     st.session_state.model = model
     return st.session_state.client.chats.create(
         model=model, config=make_config(model), history=history or []
