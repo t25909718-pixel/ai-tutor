@@ -12,13 +12,16 @@ Browser-la http://localhost:8501 open aagum.
 Same WiFi-la irukkura friends-um "Network URL" vechu open pannalam.
 """
 
+import functools
 import json
 import os
+import re
 import time
 
 import streamlit as st
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
 
 # Tools + teaching prompt ellam Gemini CLI version-la irundhu reuse pannrom
 from tutor_agent_gemini import (
@@ -101,6 +104,56 @@ if not student:
 FALLBACK_MODELS = [MODEL, "gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.5-flash-lite"]
 
 
+@functools.wraps(save_progress)
+def save_progress_tool(student_name: str, topic: str, score: str, weak_points: list[str]) -> str:
+    # Model indha tool-a call pannina, indha turn-la save aagiduchu nu note pannrom
+    result = save_progress(student_name, topic, score, weak_points)
+    if result == "Saved.":
+        st.session_state.saved_this_turn = True
+    return result
+
+
+class QuizResult(BaseModel):
+    graded: bool  # tutor indha message-la quiz answers-a check panni score sonnucha?
+    topic: str
+    score: str
+    weak_points: list[str]
+
+
+SCORE_PATTERN = re.compile(r"\b\d{1,2}\s*(?:/|out of)\s*\d{1,2}\b", re.IGNORECASE)
+
+
+def backup_save_quiz(reply: str):
+    """Model save_progress call pannala na, reply-la score irundha naame extract panni save pannrom."""
+    if st.session_state.get("saved_this_turn") or not SCORE_PATTERN.search(reply):
+        return
+    recent = st.session_state.messages[-6:] + [{"role": "assistant", "content": reply}]
+    transcript = "\n".join(f"{m['role']}: {m['content']}" for m in recent)
+    try:
+        r = st.session_state.client.models.generate_content(
+            model=st.session_state.get("model", MODEL),
+            contents=(
+                "Below is the end of a tutoring chat. Did the tutor's LAST message grade the student's "
+                "quiz answers and give a score? If yes, set graded=true and fill topic (short), score "
+                "(like '2/3') and weak_points (what the student got wrong, short phrases, may be empty). "
+                "If not, set graded=false and leave other fields empty.\n\n" + transcript
+            ),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=QuizResult,
+                thinking_config=types.ThinkingConfig(thinking_budget=0)
+                if st.session_state.get("model", MODEL).startswith("gemini-2.5")
+                else types.ThinkingConfig(thinking_level="LOW"),
+            ),
+        )
+        q = r.parsed
+        if q and q.graded and q.topic and q.score:
+            if save_progress(student, q.topic, q.score, q.weak_points) == "Saved.":
+                st.session_state.saved_this_turn = True
+    except Exception as e:  # backup fail aanaalum chat nikkaadhu
+        print("backup save failed:", e)
+
+
 def make_config(model):
     progress = get_progress(student)
     # SPEED: thinking kammi. 2.5 models thinking_budget use pannum, 3.x thinking_level.
@@ -111,9 +164,10 @@ def make_config(model):
     return types.GenerateContentConfig(
         system_instruction=SYSTEM
         + f"\n\nThe student's name is {student}."
-        + f"\nTheir past progress (already loaded, do NOT call get_progress): {progress}",
+        + f"\nTheir past progress (already loaded, do NOT call get_progress): {progress}"
+        + "\nIMPORTANT: Whenever you tell the student their quiz score, call save_progress in that same turn.",
         thinking_config=thinking,
-        tools=[save_progress, search_notes],
+        tools=[save_progress_tool, search_notes],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(
             maximum_remote_calls=MAX_TOOL_CALLS
         ),
@@ -159,6 +213,7 @@ if prompt := st.chat_input("Un doubt-a type pannu..."):
 
     with st.chat_message("assistant", avatar="🎓"):
         reply, last_error = None, ""
+        st.session_state.saved_this_turn = False
         # Busy-a irundha: ella models-um try pannum, 2 round (nadula 3 sec wait)
         for attempt in range(2):
             missing_models = st.session_state.setdefault("missing_models", set())
@@ -194,6 +249,10 @@ if prompt := st.chat_input("Un doubt-a type pannu..."):
 
         if reply and st.session_state.get("model", MODEL) != MODEL:
             st.caption(f"⚡ Main model busy, {st.session_state.model} vechu answer pannen")
+        if reply:
+            backup_save_quiz(reply)  # model save marandhaalum score database-ku pogum
+            if st.session_state.get("saved_this_turn"):
+                st.caption("💾 Quiz result save aagiduchu")
         if not reply:
             msg = last_error
             if "503" in msg or "UNAVAILABLE" in msg or "high demand" in msg:
