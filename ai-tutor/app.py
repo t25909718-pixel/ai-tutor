@@ -175,7 +175,8 @@ if prompt := st.chat_input("Un doubt-a type pannu..."):
                     break
                 except Exception as e:
                     last_error = str(e)
-                    busy = any(x in last_error for x in ("503", "UNAVAILABLE", "overloaded", "high demand"))
+                    # Busy (503) illa free limit (429) -> adutha model try pannum (ovvoru model-kkum thaniya limit)
+                    busy = any(x in last_error for x in ("503", "UNAVAILABLE", "overloaded", "high demand", "429", "RESOURCE_EXHAUSTED"))
                     missing = "404" in last_error or "NOT_FOUND" in last_error
                     if missing:
                         missing_models.add(model)
