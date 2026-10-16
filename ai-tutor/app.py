@@ -26,8 +26,9 @@ from tutor_agent_gemini import (
     MODEL,
     NOTES_DIR,
     SYSTEM,
-    _load_progress,
+    USE_SUPABASE,
     get_progress,
+    load_history,
     save_progress,
     search_notes,
 )
@@ -64,14 +65,19 @@ with st.sidebar:
     if student:
         st.divider()
         st.subheader("📈 Un progress")
-        history = _load_progress().get(student.strip().lower(), [])
+        try:
+            history = load_history(student, limit=5)
+        except Exception:
+            history = []
+            st.caption("⚠️ Progress load aagala")
         if history:
-            for h in reversed(history[-5:]):
+            for h in reversed(history):
                 weak = ", ".join(h["weak_points"]) or "—"
                 st.markdown(f"**{h['topic']}** · {h['score']}  \n<small>{h['date']} · weak: {weak}</small>",
                             unsafe_allow_html=True)
         else:
             st.caption("Quiz mudicha inga varum")
+        st.caption("💾 Database-la save aagudhu" if USE_SUPABASE else "📁 Local file-la save aagudhu")
 
     if st.button("🔄 New chat", use_container_width=True):
         for k in ("chat", "messages", "chat_for", "client"):
